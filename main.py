@@ -9,8 +9,10 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import argparse
+
 from disruptcnn.loader import data_generator, EceiDataset
 from disruptcnn.model import TCN
+
 import time
 from tensorboardX import SummaryWriter
 import os, psutil, shutil
@@ -134,7 +136,7 @@ def main():
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
 
-    
+
 
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
@@ -220,7 +222,7 @@ def main_worker(gpu,ngpus_per_node,args):
     #create the indices for train/val/test split
     dataset.train_val_test_split()
     #create data loaders
-    train_loader, val_loader, test_loader = data_generator(dataset, args.batch_size, 
+    train_loader, val_loader, test_loader = data_generator(dataset, args.batch_size,
                                                             distributed=args.distributed,
                                                             num_workers=args.workers,
                                                             undersample=args.undersample)
@@ -229,7 +231,7 @@ def main_worker(gpu,ngpus_per_node,args):
     #TODO Add separate argsparse for epochs_warmup and epochs_valid?
     if args.iterations_warmup is None: args.iterations_warmup = 5*len(train_loader)
     if args.iterations_valid is None: args.iterations_valid = len(train_loader)
-    if args.log_interval is None: 
+    if args.log_interval is None:
         if args.test==0:
             args.log_interval = args.iterations_valid
         else:
@@ -284,10 +286,10 @@ def main_worker(gpu,ngpus_per_node,args):
 
             #recreate the loaders with the splits from before
             dataset.train_val_test_split(train_inds=train_inds,val_inds=val_inds,test_inds=test_inds)
-            
+
             #NOTE: to reuse the train_inds, etc. as defined by the splits file, the undersample has to
             #      be turned off here
-            train_loader, val_loader, test_loader = data_generator(dataset, args.batch_size, 
+            train_loader, val_loader, test_loader = data_generator(dataset, args.batch_size,
                                                         distributed=args.distributed,
                                                         num_workers=args.workers,
                                                         undersample=None)
@@ -357,9 +359,9 @@ def main_worker(gpu,ngpus_per_node,args):
             steps += data.shape[0]*data.shape[-1]
             total_loss += train_loss
 
-            #log training 
+            #log training
             if batch_idx % args.log_interval == 0:
-                if args.distributed: 
+                if args.distributed:
                     total_loss = all_reduce(total_loss).item()
                     total_loss = total_loss/args.world_size
                 if args.rank==0:
@@ -368,20 +370,20 @@ def main_worker(gpu,ngpus_per_node,args):
                                 epoch, batch_idx, len(train_loader), 100. * (batch_idx / len(train_loader)), iteration,
                                 np.sum(train_loader.dataset.dataset.disruptedi[global_index])/global_index.size(), total_loss/args.log_interval, steps,(time.time()-args.tstart),psutil.virtual_memory().used/1024**3.,lr_epoch))
                 total_loss = 0
-    
+
             #validate
             if (iteration>0) & (iteration % args.iterations_valid == 0) & (args.test==0):
                 valid_loss, valid_acc, valid_f1, TP, TN, FP, FN,threshold = evaluate(val_loader, model, args)
                 acc = valid_acc
-                
-                if is_writer: 
+
+                if is_writer:
                     writer.add_scalar('valid_loss',valid_loss,iteration)
                     writer.add_scalar('valid_acc',valid_acc,iteration)
                     writer.add_scalar('valid_f1',valid_f1,iteration)
                 # remember best acc and save checkpoint
                 is_best = acc > best_acc
                 best_acc = max(acc, best_acc)
-                 
+
                 if (not args.multiprocessing_distributed and args.rank==0) or \
                    (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
                     save_checkpoint({
@@ -394,7 +396,7 @@ def main_worker(gpu,ngpus_per_node,args):
                         'f1': valid_f1,
                         'threshold': threshold,
                     }, is_best,filename='checkpoint.'+os.environ['SLURM_JOB_ID']+'.pth.tar')
-            
+
 
     print("Main training loop ended")
 
@@ -447,12 +449,12 @@ def plot_output(data,output,target,weight,args,filename='output.png',title=''):
 
 def train_seq(data, target, weight, model, optimizer, args):
     '''Takes a batch sequence and trains, splitting if needed'''
-    if args.cuda: 
+    if args.cuda:
         data, target, weight  = data.cuda(non_blocking=True), \
                                 target.cuda(non_blocking=True), \
                                 weight.cuda(non_blocking=True)
     data = data.view(data.shape[0], args.input_channels, -1)
-    
+
     #No data splitting
     optimizer.zero_grad()
     output = model(data)
@@ -495,10 +497,10 @@ def evaluate(val_loader,model,args):
             total_loss += loss
             total += target[...,args.nrecept-1:].numel()
             for i,threshold in enumerate(args.thresholds):
-                correct[i] += accuracy(output[...,args.nrecept-1:],target[...,args.nrecept-1:],threshold=threshold) 
+                correct[i] += accuracy(output[...,args.nrecept-1:],target[...,args.nrecept-1:],threshold=threshold)
                 TP, TN, FP, FN = confusion_matrix(output[...,args.nrecept-1:],target[...,args.nrecept-1:],threshold=threshold)
                 TPs[i] += TP; TNs[i] += TN; FPs[i] += FP; FNs[i] += FN
-            
+
             #plot disruptive output
             if args.plot:
                 for (i,gi) in enumerate(global_index):
@@ -555,7 +557,7 @@ def f1_score_pieces(output,target,threshold=0.5):
     TP = (pred*target).float().sum()
     TP_FP = pred.sum()
     TP_FN = target.sum()
-    return TP, TP_FP, TP_FN 
+    return TP, TP_FP, TP_FN
 
 def f1_score(TP,TP_FP,TP_FN,eps=1e-10):
     precision = TP/TP_FP+eps
@@ -570,7 +572,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 
 def create_model(args):
     channel_sizes = [args.nhid] * args.levels
-    #first, verify that the requested args.nrecept and args.dilation_size are sufficient for the 
+    #first, verify that the requested args.nrecept and args.dilation_size are sufficient for the
     #args.nrecept requested
     nrecepttotal = calc_seq_length(args.kernel_size,args.dilation_size,args.levels)
     assert nrecepttotal >= args.nrecept
@@ -581,8 +583,8 @@ def create_model(args):
     #reset args.nrecept with the actual receptive field
     args.nrecept = calc_seq_length(args.kernel_size,dilation_sizes,args.levels)
 
-    model = TCN(args.input_channels, args.n_classes, channel_sizes, 
-                kernel_size=args.kernel_size, 
+    model = TCN(args.input_channels, args.n_classes, channel_sizes,
+                kernel_size=args.kernel_size,
                 dropout=args.dropout,
                 dilation_size=dilation_sizes)
     return model
