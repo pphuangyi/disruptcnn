@@ -1,44 +1,43 @@
-#!/usr/bin python
+# !/usr/bin python
 #
-#MIT License
+# MIT License
 #
-#Copyright (c) 2018 CMU Locus Lab
+# Copyright (c) 2018 CMU Locus Lab
 #
-#Permission is hereby granted, free of charge, to any person obtaining a copy
-#of this software and associated documentation files (the "Software"), to deal
-#in the Software without restriction, including without limitation the rights
-#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#copies of the Software, and to permit persons to whom the Software is
-#furnished to do so, subject to the following conditions:
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
 #
-#The above copyright notice and this permission notice shall be included in all
-#copies or substantial portions of the Software.
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
 #
-#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-#SOFTWARE.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 #
 #
-#Temporal Convolutional Network code, from the original repo (https://github.com/locuslab/TCN)
-#@article{BaiTCN2018,
-#	author    = {Shaojie Bai and J. Zico Kolter and Vladlen Koltun},
-#	title     = {An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling},
-#	journal   = {arXiv:1803.01271},
-#	year      = {2018},
-#}
+# Temporal Convolutional Network code, from the original repo
+# (https://github.com/locuslab/TCN)
+# @article{BaiTCN2018,
+# 	author    = {Shaojie Bai and J. Zico Kolter and Vladlen Koltun},
+# 	title     = {An Empirical Evaluation of Generic Convolutional and
+#                 Recurrent Networks for Sequence Modeling},
+# 	journal   = {arXiv:1803.01271},
+# 	year      = {2018},
+# }
 #
-#modified slightly here for arbitrary dilation factors.
-#
+# modified slightly here for arbitrary dilation factors.
 
-import torch
-import torch.nn as nn
+from torch import nn
 from torch.nn.utils import weight_norm
-import numpy as np
-#import torch.nn.init as init
+from torch.nn.functional import relu
 
 
 class Chomp1d(nn.Module):
@@ -50,59 +49,51 @@ class Chomp1d(nn.Module):
         return x[..., :-self.chomp_size].contiguous()
 
 
-class TemporalBlock(nn.Module):
+class TemporalResidualBlock(nn.Module):
+    """
+    Convolution that produce sequence of same length
+    with stride = 1, we have
+    seq_len_out = seq_len_in + 2 * padding - dilation * (kernel_size - 1).
+    """
     def __init__(self,
-                 n_inputs,
-                 n_outputs,
+                 in_channels,
+                 out_channels,
                  kernel_size,
-                 stride,
                  dilation,
-                 padding,
                  dropout = 0.2):
 
         super().__init__()
 
-        # block 1
-        self.conv1    = weight_norm(nn.Conv1d(n_inputs,
-                                              n_outputs,
-                                              kernel_size,
-                                              stride   = stride,
-                                              padding  = padding,
-                                              dilation = dilation))
-        self.chomp1   = Chomp1d(padding)
-        self.relu1    = nn.ReLU()
-        self.dropout1 = nn.Dropout(dropout)
+        padding = dilation * (kernel_size - 1)
 
-        # block 2
-        self.conv2    = weight_norm(nn.Conv1d(n_outputs,
-                                              n_outputs,
-                                              kernel_size,
-                                              stride   = stride,
-                                              padding  = padding,
-                                              dilation = dilation))
-        self.chomp2   = Chomp1d(padding)
-        self.relu2    = nn.ReLU()
-        self.dropout2 = nn.Dropout(dropout)
+        self.conv1 = weight_norm(nn.Conv1d(in_channels,
+                                           out_channels,
+                                           kernel_size,
+                                           padding  = padding,
+                                           dilation = dilation))
+        self.conv2 = weight_norm(nn.Conv1d(out_channels,
+                                           out_channels,
+                                           kernel_size,
+                                           padding  = padding,
+                                           dilation = dilation))
 
-
-        self.net = nn.Sequential(self.conv1,
-                                 self.chomp1,
-                                 self.relu1,
-                                 self.dropout1,
-                                 self.conv2,
-                                 self.chomp2,
-                                 self.relu2,
-                                 self.dropout2)
+        self.block = nn.Sequential(self.conv1,
+                                   Chomp1d(padding),
+                                   nn.ReLU(),
+                                   nn.Dropout(dropout),
+                                   self.conv2,
+                                   Chomp1d(padding),
+                                   nn.ReLU(), # should we have relu here?
+                                   nn.Dropout(dropout))
 
 
-        if n_inputs != n_outputs:
-            self.downsample = nn.Conv1d(n_inputs, n_outputs, 1)
+        if in_channels != out_channels:
+            self.downsample = nn.Conv1d(in_channels, out_channels, 1)
         else:
             self.downsample = nn.Identity()
-        self.n_inputs  = n_inputs
-        self.n_outputs = n_outputs
 
-        self.relu = nn.ReLU()
+        self.in_channels  = in_channels
+        self.out_channels = out_channels
 
         self.init_weights()
 
@@ -110,45 +101,42 @@ class TemporalBlock(nn.Module):
         self.conv1.weight.data.normal_(0, 0.01)
         self.conv2.weight.data.normal_(0, 0.01)
 
-        if self.n_inputs != self.n_outputs:
+        if self.in_channels != self.out_channels:
             self.downsample.weight.data.normal_(0, 0.01)
 
-    def forward(self, x):
-        out = self.net(x)
-        res = self.downsample(x)
-        return self.relu(out + res)
+    def forward(self, data):
+        out = self.block(data)
+        res = self.downsample(data)
+        return relu(out + res)
 
 
 class TemporalConvNet(nn.Module):
     def __init__(self,
-                 num_inputs,
-                 num_channels,
-                 dilation_size = 2,
+                 in_channels,
+                 out_channels_list,
                  kernel_size   = 2,
+                 dilation_size = 2,
                  dropout       = 0.2):
 
         super().__init__()
 
         layers = []
-        num_levels = len(num_channels)
+        num_levels = len(out_channels_list)
 
-        if np.isscalar(dilation_size):
-            dilation_size = [dilation_size**i for i in range(num_levels)]
+        if isinstance(dilation_size, int):
+            dilation_size = [dilation_size ** i for i in range(num_levels)]
 
+        in_ch = in_channels
         for i in range(num_levels):
-            dilation     = dilation_size[i]
-            in_channels  = num_inputs if i == 0 else num_channels[i - 1]
-            out_channels = num_channels[i]
+            out_ch = out_channels_list[i]
+            layers += [TemporalResidualBlock(in_ch,
+                                             out_ch,
+                                             kernel_size,
+                                             dilation = dilation_size[i],
+                                             dropout  = dropout)]
+            in_ch = out_ch
 
-            layers += [TemporalBlock(in_channels,
-                                     out_channels,
-                                     kernel_size,
-                                     stride   = 1,
-                                     padding  = (kernel_size-1) * dilation,
-                                     dilation = dilation,
-                                     dropout  = dropout)]
+        self.net = nn.Sequential(*layers)
 
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.network(x)
+    def forward(self, data):
+        return self.net(data)

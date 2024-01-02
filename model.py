@@ -1,36 +1,35 @@
 """
+No worries, I will use BCELossWithLogits and yes,
+I will remove sigmoid for you :)
 """
-import torch
+
 from torch import nn
-import torch.nn.functional as F
 
 from tcn import TemporalConvNet
 
+
 class TCN(nn.Module):
     def __init__(self,
-                 input_size,
-                 output_size,
-                 num_channels,
+                 in_channels,
+                 out_channels_list,
                  kernel_size,
-                 dropout,
-                 dilation_size):
+                 dilation_size,
+                 dropout):
 
         super().__init__()
 
-        self.tcn = TemporalConvNet(input_size,
-                                   num_channels,
+        self.tcn = TemporalConvNet(in_channels,
+                                   out_channels_list,
                                    kernel_size   = kernel_size,
-                                   dropout       = dropout,
-                                   dilation_size = dilation_size)
+                                   dilation_size = dilation_size,
+                                   dropout       = dropout)
 
-        self.linear = nn.Linear(num_channels[-1], output_size)
+        self.lin = nn.Linear(out_channels_list[-1], 1)
 
-    def forward(self, inputs):
+    def forward(self, data):
         """
-        Inputs have to have dimension (N, C_in, L_in)
-        # TODO: replace with BCELossWithLogits? Removes sigmoid
+        Input has dimension (batch, num_channels, seq_len)
+        Need to move channels dimension to the last for the linear map.
         """
-        y1 = self.tcn(inputs)
-        o = self.linear(y1.permute(0, 2, 1)).squeeze(dim = -1)
-
-        return torch.sigmoid(o)
+        data = self.tcn(data)
+        return self.lin(data.permute(0, 2, 1)).squeeze(-1)
