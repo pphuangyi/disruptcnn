@@ -4,6 +4,7 @@ from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 import numpy as np
 
+
 class StratifiedSampler(DistributedSampler):
     """
     Sampler that restricts data loading to a subset of the dataset,
@@ -16,7 +17,7 @@ class StratifiedSampler(DistributedSampler):
 
     Arguments:
         dataset                 : Dataset used for sampling.
-        stratify (optional)     : Labels to balance among batches
+        strata (optional)     : Labels to balance among batches
         undersample (optional)  : Fraction of neg/pos samples desired
                                   (e.g. 1.0 for equal;
                                         0.5 for 1/3 neg, 2/3 pos, etc.)
@@ -29,13 +30,13 @@ class StratifiedSampler(DistributedSampler):
 
     def __init__(self,
                  dataset,
-                 stratify     = None,
+                 strata       = None,
                  undersample  = None,
                  distributed  = False,
                  num_replicas = None,
                  rank         = None):
 
-        self.stratify    = stratify
+        self.strata      = strata
         self.undersample = undersample
         self.distributed = distributed
 
@@ -45,93 +46,89 @@ class StratifiedSampler(DistributedSampler):
                                         num_replicas = num_replicas,
                                         rank         = rank)
         else:
-            #TODO need to create ither variables defined in distriburedsampler when stratify off
+            # TODO need to create iter variables defined in distriburedsampler when strata off
             self.num_replicas = 1
             self.rank = 0
             self.epoch = 0
 
-        if self.stratify is not None:
-            self.pos_stratify = np.where(self.stratify == 1)[0]
-            self.neg_stratify = np.where(self.stratify == 0)[0]
+        if self.strata is not None:
+            # NOTE: The return of np.where is a tuple!
+            self.pos_stratum = np.where(self.strata == 1)[0]
+            self.neg_stratum = np.where(self.strata == 0)[0]
 
-            self.Npos = int(sum(self.stratify))
-            self.Nneg = int(self.stratify.size - sum(self.stratify))
+            self.num_pos = int(len(self.pos_stratum))
+            self.num_neg = int(len(self.neg_stratum))
 
-            self.pos_num_samples = int(math.ceil(self.Npos * 1.0 / self.num_replicas))
-            if self.undersample is not None:
-                self.neg_num_samples = int(self.undersample * self.pos_num_samples)
+            # Per-replica samples
+            self.pos_per_replica = int(math.ceil(self.num_pos / self.num_replicas))
+
+            if self.undersample is None:
+                self.neg_per_replica = int(math.ceil(self.num_neg / self.num_replicas))
             else:
-                self.neg_num_samples = int(math.ceil(self.Nneg * 1.0 / self.num_replicas))
+                self.neg_per_replica = int(self.undersample * self.pos_per_replica)
 
-            self.num_samples = self.pos_num_samples + self.neg_num_samples
-            self.pos_total_size = self.pos_num_samples * self.num_replicas
-            self.neg_total_size = self.neg_num_samples * self.num_replicas
+            self.samples_per_replica = self.pos_per_replica + self.neg_per_replica
+
+            self.pos_total = self.pos_per_replica * self.num_replicas
+            self.neg_total = self.neg_per_replica * self.num_replicas
 
             if self.undersample is not None:
-                g = torch.Generator()
-                g.manual_seed(0)
-                neg_indices = torch.randperm(self.Nneg, generator=g)
-                self.neg_num_samples = int(self.undersample*self.pos_num_samples)
-                self.neg_indices_init = neg_indices[:self.neg_total_size]
-                self.neg_used_indices = self.neg_stratify[self.neg_indices_init]
-            else:
-                self.neg_used_indices = self.neg_stratify
+                rng = torch.Generator()
+                rng.manual_seed(0)
 
-            #global indices used (fixed over epochs), for convenience in reading out
-            self.pos_used_indices = self.pos_stratify
+                neg_indices = torch.randperm(self.num_neg, generator = rng)
+
+                self.neg_indices_init = neg_indices[:self.neg_total]
+
 
     def __iter__(self):
+
         # deterministically shuffle based on epoch
-        g = torch.Generator()
-        g.manual_seed(self.epoch)
-        if self.stratify is not None:
-            pos_indices = torch.randperm(self.Npos, generator=g).tolist()
+        rng = torch.Generator()
+        rng.manual_seed(self.epoch)
+
+        if self.strata is not None:
+
+            pos_indices = torch.randperm(self.num_pos, generator = rng).tolist()
+
             if self.undersample is not None:
-                indices = torch.randperm(len(self.neg_indices_init), generator=g)
+                indices = torch.randperm(len(self.neg_indices_init), generator = rng)
                 neg_indices = self.neg_indices_init[indices].tolist()
             else:
-                neg_indices = torch.randperm(self.Nneg, generator=g).tolist()
+                neg_indices = torch.randperm(self.num_neg, generator = rng).tolist()
 
 
-            # add extra samples to make it evenly divisible
-            pos_indices += pos_indices[:(self.pos_total_size - len(pos_indices))]
-            neg_indices += neg_indices[:(self.neg_total_size - len(neg_indices))]
-            assert len(pos_indices) == self.pos_total_size
-            assert len(neg_indices) == self.neg_total_size
+            # Add extra samples to make it evenly divisible
+            pos_indices += pos_indices[ : self.pos_total - len(pos_indices)]
+            neg_indices += neg_indices[ : self.neg_total - len(neg_indices)]
 
-            # subsample
-            pos_indices = pos_indices[self.rank:self.pos_total_size:self.num_replicas]
-            neg_indices = neg_indices[self.rank:self.neg_total_size:self.num_replicas]
-            assert len(pos_indices) == self.pos_num_samples
-            assert len(neg_indices) == self.neg_num_samples
+            # Subsample data for a rank
+            pos_indices = pos_indices[self.rank : self.pos_total : self.num_replicas]
+            neg_indices = neg_indices[self.rank : self.neg_total : self.num_replicas]
 
             # pos/neg to global inds
-            pos_indices = self.pos_stratify[pos_indices]
-            neg_indices = self.neg_stratify[neg_indices]
+            pos_indices = self.pos_strata[pos_indices]
+            neg_indices = self.neg_strata[neg_indices]
 
             # interleave
-            nfact = math.ceil(len(neg_indices)/len(pos_indices))
+            neg_factor = math.ceil(len(neg_indices) / len(pos_indices))
             indices = []
-            for i,j in enumerate(range(0,len(neg_indices),nfact)):
+            for i, j in enumerate(range(0, len(neg_indices), neg_factor)):
                 indices.append(pos_indices[i])
-                indices.extend(neg_indices[j:j+nfact])
-
-            return iter(indices)
+                indices.extend(neg_indices[j : j + neg_factor])
         else:
-            indices = torch.randperm(len(self.dataset), generator=g).tolist()
+            indices = torch.randperm(len(self.dataset), generator= rng).tolist()
 
-            # add extra samples to make it evenly divisible
+            # Add extra samples to make it evenly divisible
+            # NOTE: total_size
             indices += indices[:(self.total_size - len(indices))]
-            assert len(indices) == self.total_size
-
-            # subsample
+            # Subsample data for a rank
             indices = indices[self.rank:self.total_size:self.num_replicas]
-            assert len(indices) == self.num_samples
 
-            return iter(indices)
+        return iter(indices)
 
     def __len__(self):
-        return self.num_samples
+        return self.samples_per_replica
 
     def set_epoch(self, epoch):
         self.epoch = epoch
