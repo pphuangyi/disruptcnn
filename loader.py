@@ -24,13 +24,13 @@ class EceiDataset(data.Dataset):
               Shot - shot number
               segments - number of ECEi segments (not needed)
               tstart [ms] - start time
-              tlast [ms] - last time 
+              tlast [ms] - last time
               dt [ms] - timestep
               SNR min - Minimum SNR of entire signal
               t_flat_start [ms] - start time of flattop
               t_flat_duration [ms] - time duration of flattop
               tdisrupt [ms] - Time of disruption (corresponds to max dIp/dt). -1000 if not disrupted.
-        train: 
+        train:
         flattop_only: Use only flattop times
         Twarn: time before disruption we wish to begin labelling as "disruptive"
         test: training set size (# shots), for testing of overfitting purposes
@@ -70,7 +70,7 @@ class EceiDataset(data.Dataset):
         self.disrupt_idx = np.ceil((tdisrupt-self.Twarn-tstarts)/dt).astype(int)
         self.disrupt_idx[tdisrupt<0] = -1000 #TODO: should this be something else? nan isnt possible with int
         self.disrupted = self.disrupt_idx>0 #True if disrupted, False if not
-        
+
         self.zero_idx = np.ceil((0.-tstarts)/dt).astype(int)
         if flattop_only:
             self.start_idx = np.ceil((tflatstarts-tstarts)/dt).astype(int)
@@ -136,17 +136,17 @@ class EceiDataset(data.Dataset):
             num_seq_frac = (N - self.nsub)/float(self.nsub - self.nrecept + 1)+1
             num_seq = np.ceil(num_seq_frac).astype(int)
             if num_seq<1: num_seq = 1 #try to force at least 1 subsequence from shot
-            #determine if there is enough additional sequence points to cover the 
+            #determine if there is enough additional sequence points to cover the
             #proposed number of sequences
             Nseq = self.nsub + (num_seq - 1)*(self.nsub - self.nrecept + 1)
-            if ((self.start_idx[s]>self.zero_idx[s]) & 
+            if ((self.start_idx[s]>self.zero_idx[s]) &
                ((self.start_idx[s] - self.zero_idx[s] + 1) > (Nseq - N)*self.data_step)):
                 self.start_idx[s] -= (Nseq - N)*self.data_step
             else:
                 num_seq -= 1
                 Nseq = self.nsub + (num_seq - 1)*(self.nsub - self.nrecept + 1)
                 self.start_idx[s] += (N - Nseq)*self.data_step
-            
+
             for m in range(num_seq):
                 self.shot_idxi += [s]
                 self.start_idxi += [self.start_idx[s] + (m*self.nsub - m*self.nrecept + m)*self.data_step]
@@ -155,8 +155,8 @@ class EceiDataset(data.Dataset):
                     self.disrupt_idxi += [self.disrupt_idx[s]]
                 else:
                     self.disrupt_idxi += [-1000]
-        
-        self.shot_idxi = np.array(self.shot_idxi); self.start_idxi = np.array(self.start_idxi); 
+
+        self.shot_idxi = np.array(self.shot_idxi); self.start_idxi = np.array(self.start_idxi);
         self.stop_idxi = np.array(self.stop_idxi); self.disrupt_idxi = np.array(self.disrupt_idxi)
         self.disruptedi = self.disrupt_idxi>0
         self.length = len(self.shot_idxi)
@@ -179,7 +179,7 @@ class EceiDataset(data.Dataset):
 
     def train_val_test_split(self,sizes=[0.8,0.1,0.1],random_seed=42,
                                   train_inds=None,val_inds=None,test_inds=None):
-        """Creates indices to split data into train, validation, and test datasets. 
+        """Creates indices to split data into train, validation, and test datasets.
         Stratifies to ensure each group has class structure consistent with original class balance
         sizes: Fractional size of train, validation, and test data sizes (3 element array or list)
         """
@@ -266,7 +266,7 @@ def data_generator(dataset,batch_size,distributed=False,num_workers=0,num_replic
     dataset: EceiDataset object
     distributed (optional): (True/False) using distributed workers
     num_workers (optional): Number of processes
-    undersample (optional): Fraction of neg/pos samples 
+    undersample (optional): Fraction of neg/pos samples
     """
 
     if not hasattr(dataset,'train_inds'):
@@ -277,10 +277,20 @@ def data_generator(dataset,batch_size,distributed=False,num_workers=0,num_replic
     val_dataset = data.Subset(dataset,dataset.val_inds)
     test_dataset = data.Subset(dataset,dataset.test_inds)
 
-    #shuffle dataset each epoch for training data using DistrbutedSampler. Also splits among workers. 
-    train_sampler = StratifiedSampler(train_dataset,num_replicas=num_replicas,rank=rank,stratify=dataset.disruptedi[dataset.train_inds],distributed=distributed,undersample=undersample)
-    val_sampler = StratifiedSampler(val_dataset,num_replicas=num_replicas,rank=rank,stratify=dataset.disruptedi[dataset.val_inds],distributed=distributed,undersample=undersample)
-   
+    #shuffle dataset each epoch for training data using DistrbutedSampler. Also splits among workers.
+    train_sampler = StratifiedSampler(train_dataset,
+                                      num_replicas=num_replicas,
+                                      rank=rank,
+                                      stratify=dataset.disruptedi[dataset.train_inds],
+                                      distributed=distributed,
+                                      undersample=undersample)
+    val_sampler = StratifiedSampler(val_dataset,
+                                    num_replicas=num_replicas,
+                                    rank=rank,
+                                    stratify=dataset.disruptedi[dataset.val_inds],
+                                    distributed=distributed,
+                                    undersample=undersample)
+
     #redo class weights, since they are based on non-undersampled datasets
     if undersample is not None:
         inds = np.array([dataset.train_inds[i] for i in train_sampler])
@@ -303,5 +313,5 @@ def data_generator(dataset,batch_size,distributed=False,num_workers=0,num_replic
         test_dataset, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
         drop_last=True)
-    
+
     return train_loader,val_loader,test_loader
